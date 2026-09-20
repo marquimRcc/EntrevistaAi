@@ -28,19 +28,19 @@ public class OpenAiClient {
     private final RestClient restClient;
     private final ObjectMapper objectMapper;
     private final String model;
+    private final boolean jsonModeEnabled;
 
-    public OpenAiClient(@Value("${openai.api-key}") String apiKey,
+    public OpenAiClient(@Value("${openai.api-key:}") String apiKey,
                          @Value("${openai.model}") String model,
+                         @Value("${openai.base-url:https://api.openai.com/v1}") String baseUrl,
+                         @Value("${openai.json-mode-enabled:true}") boolean jsonModeEnabled,
                          ObjectMapper objectMapper) {
         this.model = model;
+        this.jsonModeEnabled = jsonModeEnabled;
         this.objectMapper = objectMapper;
-        // RestClient é o cliente HTTP "moderno" do Spring (substitui o antigo
-        // RestTemplate). baseUrl + headers padrão aqui evitam repetir isso em
-        // toda chamada. A chave da OpenAI (apiKey) vem de application.yml ->
-        // variável de ambiente OPENAI_API_KEY (nunca fica hardcoded no código).
         this.restClient = RestClient.builder()
-            .baseUrl("https://api.openai.com/v1")
-            .defaultHeader("Authorization", "Bearer " + apiKey)
+            .baseUrl(baseUrl)
+            .defaultHeader("Authorization", "Bearer " + (apiKey != null && !apiKey.isBlank() ? apiKey : "not-needed"))
             .defaultHeader("Content-Type", "application/json")
             .build();
     }
@@ -65,11 +65,8 @@ public class OpenAiClient {
             String rawContent = null;
             try {
                 rawContent = callChatCompletion(systemPrompt, userPrompt);
-                // A OpenAI devolve o JSON da resposta como uma STRING dentro do
-                // JSON de transporte (choices[0].message.content), então aqui
-                // fazemos o parse "de verdade" dessa string pro JsonNode que o
-                // resto do código usa.
-                return objectMapper.readTree(rawContent);
+                String cleaned = cleanJson(rawContent);
+                return objectMapper.readTree(cleaned);
             } catch (RestClientException e) {
                 // Falha de rede/HTTP (timeout, 5xx, DNS, etc.)
                 ultimoErro = e;
@@ -85,24 +82,31 @@ public class OpenAiClient {
         throw new AiRetriesExhaustedException(MAX_TENTATIVAS, contexto);
     }
 
-    // Monta e dispara a chamada HTTP crua pra Chat Completions API da OpenAI,
-    // e extrai só o texto da resposta (o "conteúdo" que a IA gerou).
+    private String cleanJson(String raw) {
+        if (raw == null) return null;
+        String trimmed = raw.trim();
+        int start = trimmed.indexOf('{');
+        int end = trimmed.lastIndexOf('}');
+        if (start != -1 && end != -1 && end > start) {
+            return trimmed.substring(start, end + 1);
+        }
+        return trimmed;
+    }
+
+    // Monta e dispara a chamada HTTP crua pra Chat Completions API,
+    // e extrai só o texto da resposta.
     @SuppressWarnings("unchecked")
     private String callChatCompletion(String systemPrompt, String userPrompt) {
-        // Formato exigido pela API da OpenAI: uma lista de mensagens com "role"
-        // (system = instruções/regras; user = o pedido específico) e "content".
-        // response_format: json_object é o que OBRIGA a OpenAI a devolver um
-        // JSON válido no campo content (em vez de texto livre) — sem isso,
-        // teríamos que confiar que a IA "lembrou" de responder em JSON.
-        Map<String, Object> body = Map.of(
-            "model", model,
-            "messages", List.of(
-                Map.of("role", "system", "content", systemPrompt),
-                Map.of("role", "user", "content", userPrompt)
-            ),
-            "response_format", Map.of("type", "json_object"),
-            "temperature", 0.7
-        );
+        Map<String, Object> body = new java.util.HashMap<>();
+        body.put("model", model);
+        body.put("messages", List.of(
+            Map.of("role", "system", "content", systemPrompt),
+            Map.of("role", "user", "content", userPrompt)
+        ));
+        if (jsonModeEnabled) {
+            body.put("response_format", Map.of("type", "json_object"));
+        }
+        body.put("temperature", 0.7);
 
         // .body(Map.class): pedimos ao Spring pra desserializar a resposta como
         // um Map genérico (não criamos uma classe Java específica pro formato

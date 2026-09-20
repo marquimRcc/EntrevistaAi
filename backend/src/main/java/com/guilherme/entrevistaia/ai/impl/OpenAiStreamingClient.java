@@ -32,16 +32,19 @@ public class OpenAiStreamingClient {
 
     private final String apiKey;
     private final String model;
+    private final String baseUrl;
     private final ObjectMapper objectMapper;
     private final HttpClient httpClient = HttpClient.newBuilder()
         .connectTimeout(Duration.ofSeconds(10))
         .build();
 
-    public OpenAiStreamingClient(@Value("${openai.api-key}") String apiKey,
+    public OpenAiStreamingClient(@Value("${openai.api-key:}") String apiKey,
                                   @Value("${openai.model}") String model,
+                                  @Value("${openai.base-url:https://api.openai.com/v1}") String baseUrl,
                                   ObjectMapper objectMapper) {
-        this.apiKey = apiKey;
+        this.apiKey = apiKey != null && !apiKey.isBlank() ? apiKey : "not-needed";
         this.model = model;
+        this.baseUrl = baseUrl;
         this.objectMapper = objectMapper;
     }
 
@@ -68,7 +71,7 @@ public class OpenAiStreamingClient {
         }
 
         HttpRequest request = HttpRequest.newBuilder()
-            .uri(URI.create("https://api.openai.com/v1/chat/completions"))
+            .uri(URI.create(baseUrl + "/chat/completions"))
             .header("Authorization", "Bearer " + apiKey)
             .header("Content-Type", "application/json")
             .timeout(Duration.ofSeconds(60))

@@ -5,8 +5,9 @@
 !.env.example
 !*/.env.example
 
-# Backend (Maven)
+# Backend (Maven e banco local)
 backend/target/
+backend/data/
 
 # Frontend (cache incremental do tsc)
 frontend/*.tsbuildinfo
