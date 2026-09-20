@@ -32,6 +32,9 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
     private final JwtService jwtService;
     private final UserRepository userRepository;
 
+    @org.springframework.beans.factory.annotation.Value("${app.auth.bypass:false}")
+    private boolean bypassAuth;
+
     public JwtAuthenticationFilter(JwtService jwtService, UserRepository userRepository) {
         this.jwtService = jwtService;
         this.userRepository = userRepository;
@@ -40,6 +43,22 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
     @Override
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response,
                                      FilterChain filterChain) throws ServletException, IOException {
+
+        if (bypassAuth) {
+            User devUser = userRepository.findByEmail("dev@local.com")
+                .orElseGet(() -> {
+                    User u = new User();
+                    u.setEmail("dev@local.com");
+                    u.setNome("Dev Local");
+                    u.setSenhaHash("$2a$10$abcdefghijklmnopqrstuvwxyz123456789012345678901234567890");
+                    u.setCriadoEm(java.time.OffsetDateTime.now());
+                    return userRepository.save(u);
+                });
+            var authentication = new UsernamePasswordAuthenticationToken(devUser, null, Collections.emptyList());
+            SecurityContextHolder.getContext().setAuthentication(authentication);
+            filterChain.doFilter(request, response);
+            return;
+        }
 
         String authHeader = request.getHeader("Authorization");
 
