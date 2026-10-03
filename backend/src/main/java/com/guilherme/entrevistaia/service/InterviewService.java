@@ -41,6 +41,36 @@ public class InterviewService {
     private final ResumeTextExtractor resumeTextExtractor;
     private final AiResumeAnalyzer resumeAnalyzer;
     private final QuestionPromptBuilder questionPromptBuilder;
+    private final org.springframework.transaction.support.TransactionOperations transactionOperations;
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public InterviewService(InterviewRepository interviewRepository,
+                             QuestionRepository questionRepository,
+                             AnswerRepository answerRepository,
+                             FeedbackReportRepository reportRepository,
+                             ResumeAnalysisRepository resumeAnalysisRepository,
+                             AiQuestionGenerator questionGenerator,
+                             AiAnswerEvaluator answerEvaluator,
+                             AiReportGenerator reportGenerator,
+                             ResumeTextExtractor resumeTextExtractor,
+                             AiResumeAnalyzer resumeAnalyzer,
+                             QuestionPromptBuilder questionPromptBuilder,
+                             org.springframework.transaction.PlatformTransactionManager transactionManager) {
+        this.interviewRepository = interviewRepository;
+        this.questionRepository = questionRepository;
+        this.answerRepository = answerRepository;
+        this.reportRepository = reportRepository;
+        this.resumeAnalysisRepository = resumeAnalysisRepository;
+        this.questionGenerator = questionGenerator;
+        this.answerEvaluator = answerEvaluator;
+        this.reportGenerator = reportGenerator;
+        this.resumeTextExtractor = resumeTextExtractor;
+        this.resumeAnalyzer = resumeAnalyzer;
+        this.questionPromptBuilder = questionPromptBuilder;
+        this.transactionOperations = transactionManager != null
+            ? new org.springframework.transaction.support.TransactionTemplate(transactionManager)
+            : org.springframework.transaction.support.TransactionOperations.withoutTransaction();
+    }
 
     public InterviewService(InterviewRepository interviewRepository,
                              QuestionRepository questionRepository,
@@ -53,17 +83,10 @@ public class InterviewService {
                              ResumeTextExtractor resumeTextExtractor,
                              AiResumeAnalyzer resumeAnalyzer,
                              QuestionPromptBuilder questionPromptBuilder) {
-        this.interviewRepository = interviewRepository;
-        this.questionRepository = questionRepository;
-        this.answerRepository = answerRepository;
-        this.reportRepository = reportRepository;
-        this.resumeAnalysisRepository = resumeAnalysisRepository;
-        this.questionGenerator = questionGenerator;
-        this.answerEvaluator = answerEvaluator;
-        this.reportGenerator = reportGenerator;
-        this.resumeTextExtractor = resumeTextExtractor;
-        this.resumeAnalyzer = resumeAnalyzer;
-        this.questionPromptBuilder = questionPromptBuilder;
+        this(interviewRepository, questionRepository, answerRepository,
+            reportRepository, resumeAnalysisRepository, questionGenerator,
+            answerEvaluator, reportGenerator, resumeTextExtractor,
+            resumeAnalyzer, questionPromptBuilder, null);
     }
 
     // Chamado por POST /interviews. Só cria o "envelope" da entrevista — as
@@ -91,7 +114,7 @@ public class InterviewService {
     // Chamado por GET /interviews/{id}/next-question. Gera E salva uma nova
     // pergunta a cada chamada — não existe "banco de perguntas" pré-criado,
     // cada uma é gerada na hora, adaptada ao histórico até então.
-    @Transactional
+    // A chamada de IA roda FORA de transação para não prender conexão do HikariCP.
     public Question getNextQuestion(UUID interviewId, User user) {
         // loadOwnedInterview já garante duas coisas: a entrevista existe E
         // pertence ao usuário logado (ver validateOwnership mais abaixo).
@@ -118,23 +141,23 @@ public class InterviewService {
         log.info("[AI_QUESTION_REQUEST] interviewId={} ordem={}/{}",
             interviewId, proximaOrdem, interview.getTotalPerguntas());
 
-        // Chamada de rede pra OpenAI acontece aqui (ver ai/impl/OpenAiQuestionGenerator).
-        // interview inteira é passada pra IA poder olhar o histórico de perguntas
-        // anteriores e ser adaptativa.
+        // Chamada de rede pra OpenAI acontece FORA da transação (não segura conexão de banco)
         AiQuestionResult result = questionGenerator.generate(interview, proximaOrdem);
 
-        Question question = new Question();
-        question.setInterview(interview);
-        question.setOrdem(proximaOrdem);
-        question.setPergunta(result.pergunta());
-        question.setTopico(result.topico());
-        question.setDificuldade(result.dificuldade());
-        questionRepository.save(question);
+        return transactionOperations.execute(status -> {
+            Question question = new Question();
+            question.setInterview(interview);
+            question.setOrdem(proximaOrdem);
+            question.setPergunta(result.pergunta());
+            question.setTopico(result.topico());
+            question.setDificuldade(result.dificuldade());
+            questionRepository.save(question);
 
-        log.info("[AI_QUESTION_GENERATED] interviewId={} questionId={} topico={} dificuldade={}",
-            interviewId, question.getId(), result.topico(), result.dificuldade());
+            log.info("[AI_QUESTION_GENERATED] interviewId={} questionId={} topico={} dificuldade={}",
+                interviewId, question.getId(), result.topico(), result.dificuldade());
 
-        return question;
+            return question;
+        });
     }
 
     // Contexto pronto pra chamar a IA em streaming — ver prepareNextQuestionPrompt.
@@ -198,7 +221,7 @@ public class InterviewService {
     // Chamado por POST /interviews/questions/{questionId}/answer. Note que
     // recebe questionId (não interviewId) — a entrevista é descoberta a partir
     // da pergunta (question.getInterview()).
-    @Transactional
+    // A avaliação da IA roda FORA de transação para liberar conexão do pool de banco.
     public Answer submitAnswer(UUID questionId, User user, String respostaTexto) {
         Question question = questionRepository.findById(questionId)
             .orElseThrow(() -> new QuestionNotFoundException(questionId));
@@ -215,37 +238,39 @@ public class InterviewService {
 
         log.info("[AI_EVALUATION_REQUEST] questionId={} interviewId={}", questionId, interview.getId());
 
-        // Chamada de rede pra OpenAI (ver ai/impl/OpenAiAnswerEvaluator).
+        // Chamada de rede pra OpenAI fora de transação
         AiEvaluationResult result = answerEvaluator.evaluate(question, respostaTexto);
 
-        Answer answer = new Answer();
-        answer.setQuestion(question);
-        answer.setRespostaTexto(respostaTexto);
-        answer.setNota(result.nota());
-        answer.setResumoAvaliacao(result.resumo());
-        answer.setPontosFortes(result.pontosFortes());
-        answer.setGaps(result.gaps());
-        answer.setNivelDominio(result.nivelDominio());
-        answer.setRespostaModelo(result.respostaModelo());
-        answer.setCriadoEm(OffsetDateTime.now());
-        answerRepository.save(answer);
+        return transactionOperations.execute(status -> {
+            Answer answer = new Answer();
+            answer.setQuestion(question);
+            answer.setRespostaTexto(respostaTexto);
+            answer.setNota(result.nota());
+            answer.setResumoAvaliacao(result.resumo());
+            answer.setPontosFortes(result.pontosFortes());
+            answer.setGaps(result.gaps());
+            answer.setNivelDominio(result.nivelDominio());
+            answer.setRespostaModelo(result.respostaModelo());
+            answer.setCriadoEm(OffsetDateTime.now());
+            answerRepository.save(answer);
 
-        log.info("[AI_EVALUATION_COMPLETE] questionId={} interviewId={} nota={} nivelDominio={}",
-            questionId, interview.getId(), result.nota(), result.nivelDominio());
+            log.info("[AI_EVALUATION_COMPLETE] questionId={} interviewId={} nota={} nivelDominio={}",
+                questionId, interview.getId(), result.nota(), result.nivelDominio());
 
-        // Transição de estado da entrevista: se essa era a última pergunta
-        // (ordem == totalPerguntas), a entrevista acaba de virar FINALIZADA.
-        // É essa mudança de status que libera o endpoint /report (ver abaixo).
-        boolean eraUltimaPergunta = question.getOrdem() >= interview.getTotalPerguntas();
-        if (eraUltimaPergunta) {
-            interview.setStatus(InterviewStatus.FINALIZADA);
-            interview.setFinalizadoEm(OffsetDateTime.now());
-            interviewRepository.save(interview);
-            log.info("[INTERVIEW_FINISHED] interviewId={} totalPerguntas={}",
-                interview.getId(), interview.getTotalPerguntas());
-        }
+            // Transição de estado da entrevista: se essa era a última pergunta
+            // (ordem == totalPerguntas), a entrevista acaba de virar FINALIZADA.
+            // É essa mudança de status que libera o endpoint /report (ver abaixo).
+            boolean eraUltimaPergunta = question.getOrdem() >= interview.getTotalPerguntas();
+            if (eraUltimaPergunta) {
+                interview.setStatus(InterviewStatus.FINALIZADA);
+                interview.setFinalizadoEm(OffsetDateTime.now());
+                interviewRepository.save(interview);
+                log.info("[INTERVIEW_FINISHED] interviewId={} totalPerguntas={}",
+                    interview.getId(), interview.getTotalPerguntas());
+            }
 
-        return answer;
+            return answer;
+        });
     }
 
     // Chamado por POST /interviews/{id}/abandon — o candidato desistiu no meio
@@ -277,7 +302,7 @@ public class InterviewService {
     // o comportamento: idempotente — a primeira chamada gera e salva o
     // relatório (chamando a IA, que custa dinheiro e tempo); chamadas seguintes
     // só devolvem o que já foi salvo, sem gastar outra chamada de IA à toa.
-    @Transactional
+    // A geração de IA roda FORA de transação para liberar conexão do pool de banco.
     public FeedbackReport getOrGenerateReport(UUID interviewId, User user) {
         Interview interview = loadOwnedInterview(interviewId, user);
 
@@ -294,26 +319,27 @@ public class InterviewService {
         log.info("[AI_REPORT_REQUEST] interviewId={} totalPerguntas={}",
             interviewId, interview.getQuestions().size());
 
-        // Chamada de rede pra OpenAI (ver ai/impl/OpenAiReportGenerator),
-        // passando a entrevista inteira pra IA ponderar a evolução do candidato.
+        // Chamada de rede pra OpenAI fora de transação
         AiReportResult result = reportGenerator.generate(interview);
 
-        FeedbackReport report = new FeedbackReport();
-        report.setInterview(interview);
-        report.setNotaGeral(result.notaGeral());
-        report.setResumoExecutivo(result.resumoExecutivo());
-        report.setPontosFortes(result.pontosFortes());
-        report.setPontosFracos(result.pontosFracos());
-        report.setSugestoesEstudo(result.sugestoesEstudo());
-        report.setNivelPercebido(result.nivelPercebido());
-        report.setRecomendacao(result.recomendacao());
-        report.setCriadoEm(OffsetDateTime.now());
-        reportRepository.save(report);
+        return transactionOperations.execute(status -> {
+            FeedbackReport report = new FeedbackReport();
+            report.setInterview(interview);
+            report.setNotaGeral(result.notaGeral());
+            report.setResumoExecutivo(result.resumoExecutivo());
+            report.setPontosFortes(result.pontosFortes());
+            report.setPontosFracos(result.pontosFracos());
+            report.setSugestoesEstudo(result.sugestoesEstudo());
+            report.setNivelPercebido(result.nivelPercebido());
+            report.setRecomendacao(result.recomendacao());
+            report.setCriadoEm(OffsetDateTime.now());
+            reportRepository.save(report);
 
-        log.info("[AI_REPORT_GENERATED] interviewId={} notaGeral={} recomendacao={}",
-            interviewId, result.notaGeral(), result.recomendacao());
+            log.info("[AI_REPORT_GENERATED] interviewId={} notaGeral={} recomendacao={}",
+                interviewId, result.notaGeral(), result.recomendacao());
 
-        return report;
+            return report;
+        });
     }
 
     // Chamado por POST /interviews/{id}/resume. Upload é opcional e só faz
@@ -321,11 +347,7 @@ public class InterviewService {
     // as perguntas geradas — mas não travamos por status aqui: o pior caso de
     // enviar tarde é só a leitura não ter chegado a tempo de mudar perguntas
     // já feitas, o que não é motivo pra bloquear o candidato.
-    //
-    // Idempotente feito nem por acaso, igual getOrGenerateReport: reenviar o
-    // mesmo currículo (ex.: duplo clique) não gera duas chamadas de IA nem
-    // duas ResumeAnalysis pra mesma entrevista.
-    @Transactional
+    // A chamada de IA roda FORA de transação.
     public ResumeAnalysis analyzeResume(UUID interviewId, User user, byte[] arquivoPdf) {
         Interview interview = loadOwnedInterview(interviewId, user);
 
@@ -336,26 +358,29 @@ public class InterviewService {
         String textoCurriculo = resumeTextExtractor.extract(arquivoPdf);
 
         log.info("[AI_RESUME_ANALYSIS_REQUEST] interviewId={}", interviewId);
+        // Chamada de rede pra OpenAI fora de transação
         AiResumeResult result = resumeAnalyzer.analyze(
             textoCurriculo, interview.getStack(), interview.getNivel(), interview.getDescricaoVaga());
 
-        ResumeAnalysis analysis = new ResumeAnalysis();
-        analysis.setInterview(interview);
-        analysis.setNivelPercebidoCurriculo(result.nivelPercebido());
-        analysis.setResumo(result.resumo());
-        analysis.setPontosFortes(result.pontosFortes());
-        analysis.setGaps(result.gaps());
-        analysis.setAderenciaVagaPercentual(result.aderenciaVagaPercentual());
-        analysis.setPontosAderenciaVaga(result.pontosAderenciaVaga());
-        analysis.setGapsVaga(result.gapsVaga());
-        analysis.setCriadoEm(OffsetDateTime.now());
-        resumeAnalysisRepository.save(analysis);
-        interview.setResumeAnalysis(analysis);
+        return transactionOperations.execute(status -> {
+            ResumeAnalysis analysis = new ResumeAnalysis();
+            analysis.setInterview(interview);
+            analysis.setNivelPercebidoCurriculo(result.nivelPercebido());
+            analysis.setResumo(result.resumo());
+            analysis.setPontosFortes(result.pontosFortes());
+            analysis.setGaps(result.gaps());
+            analysis.setAderenciaVagaPercentual(result.aderenciaVagaPercentual());
+            analysis.setPontosAderenciaVaga(result.pontosAderenciaVaga());
+            analysis.setGapsVaga(result.gapsVaga());
+            analysis.setCriadoEm(OffsetDateTime.now());
+            resumeAnalysisRepository.save(analysis);
+            interview.setResumeAnalysis(analysis);
 
-        log.info("[AI_RESUME_ANALYSIS_COMPLETE] interviewId={} nivelPercebidoCurriculo={}",
-            interviewId, result.nivelPercebido());
+            log.info("[AI_RESUME_ANALYSIS_COMPLETE] interviewId={} nivelPercebidoCurriculo={}",
+                interviewId, result.nivelPercebido());
 
-        return analysis;
+            return analysis;
+        });
     }
 
     // Chamado por GET /interviews/{id}/resume. Devolve null se o candidato não

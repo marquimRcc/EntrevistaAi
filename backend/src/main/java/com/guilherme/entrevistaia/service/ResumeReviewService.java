@@ -42,7 +42,6 @@ public class ResumeReviewService {
     // Chamado por POST /resume-reviews. Cada envio gera uma análise nova (não é
     // idempotente): o candidato pode reenviar uma versão revisada do currículo
     // e comparar com a anterior no histórico.
-    @Transactional
     public ResumeReview review(User user, byte[] arquivoPdf) {
         String textoCurriculo = resumeTextExtractor.extract(arquivoPdf);
 
