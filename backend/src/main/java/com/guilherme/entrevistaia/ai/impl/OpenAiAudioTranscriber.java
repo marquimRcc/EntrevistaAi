@@ -4,6 +4,7 @@ import com.guilherme.entrevistaia.ai.AiAudioTranscriber;
 import com.guilherme.entrevistaia.exception.AudioTranscriptionException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.io.ByteArrayResource;
 import org.springframework.http.MediaType;
@@ -37,6 +38,7 @@ public class OpenAiAudioTranscriber implements AiAudioTranscriber {
     // RestClient.builder() do zero) pra o teste conseguir plugar um
     // MockRestServiceServer. Sem defaultHeader Content-Type de propósito: cada
     // request define multipart/form-data com o boundary gerado na hora.
+    @Autowired
     public OpenAiAudioTranscriber(@Value("${openai.api-key:}") String apiKey,
                                    @Value("${openai.transcription-model}") String model,
                                    @Value("${openai.base-url:https://api.openai.com/v1}") String baseUrl,
