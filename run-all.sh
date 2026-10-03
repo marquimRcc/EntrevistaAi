@@ -4,7 +4,7 @@ DIR="$(cd "$(dirname "$0")" && pwd)"
 # Se backend não estiver rodando, inicia
 if ! ss -tulpn | grep -q ':8080 '; then
     echo "Iniciando backend Spring Boot..."
-    (cd "$DIR/backend" && mvn spring-boot:run -Dspring-boot.run.profiles=local > "$DIR/backend.log" 2>&1) &
+    nohup bash -c "cd '$DIR/backend' && exec mvn spring-boot:run -Dspring-boot.run.profiles=local" > "$DIR/backend.log" 2>&1 &
     echo "Aguardando backend inicializar..."
     for i in {1..30}; do
         if curl -s http://localhost:8080/health | grep -q "UP"; then
@@ -20,7 +20,7 @@ fi
 # Se frontend não estiver rodando, inicia
 if ! ss -tulpn | grep -q ':5173 '; then
     echo "Iniciando frontend Vite..."
-    (cd "$DIR/frontend" && npm run dev > "$DIR/frontend.log" 2>&1) &
+    nohup bash -c "cd '$DIR/frontend' && exec npm run dev" > "$DIR/frontend.log" 2>&1 &
     sleep 2
 else
     echo "Frontend já está ativo na porta 5173."
