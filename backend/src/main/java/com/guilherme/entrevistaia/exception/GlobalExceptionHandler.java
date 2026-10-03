@@ -65,6 +65,13 @@ public class GlobalExceptionHandler {
             .body(new ErrorResponse(ex.getErrorCode(), ex.getMessage()));
     }
 
+    @ExceptionHandler(org.springframework.orm.ObjectOptimisticLockingFailureException.class)
+    public ResponseEntity<ErrorResponse> handleOptimisticLock(org.springframework.orm.ObjectOptimisticLockingFailureException ex) {
+        log.warn("[OPTIMISTIC_LOCK_CONFLICT] Requisição concorrente detectada: {}", ex.getMessage());
+        return ResponseEntity.status(HttpStatus.CONFLICT)
+            .body(new ErrorResponse("CONCURRENT_UPDATE_CONFLICT", "Operação concorrente detectada. Tente novamente."));
+    }
+
     @ExceptionHandler(InterviewAccessDeniedException.class)
     public ResponseEntity<ErrorResponse> handleAccessDenied(InterviewAccessDeniedException ex) {
         log.warn("[{}] {}", ex.getErrorCode(), ex.getMessage());

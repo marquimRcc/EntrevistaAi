@@ -14,6 +14,9 @@ public class Question {
     @GeneratedValue(strategy = GenerationType.UUID)
     private UUID id;
 
+    @Version
+    private Long version;
+
     @ManyToOne
     @JoinColumn(name = "interview_id", nullable = false)
     private Interview interview;
@@ -41,6 +44,9 @@ public class Question {
 
     public UUID getId() { return id; }
     public void setId(UUID id) { this.id = id; }
+
+    public Long getVersion() { return version; }
+    public void setVersion(Long version) { this.version = version; }
 
     public Interview getInterview() { return interview; }
     public void setInterview(Interview interview) { this.interview = interview; }

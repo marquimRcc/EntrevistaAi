@@ -17,6 +17,9 @@ public class Interview {
     @GeneratedValue(strategy = GenerationType.UUID)
     private UUID id;
 
+    @Version
+    private Long version;
+
     // Lado "dono" do relacionamento com User: aqui existe de fato a coluna
     // user_id na tabela interviews (por isso o @JoinColumn).
     @ManyToOne
@@ -117,6 +120,9 @@ public class Interview {
 
     public List<Question> getQuestions() { return questions; }
     public void setQuestions(List<Question> questions) { this.questions = questions; }
+
+    public Long getVersion() { return version; }
+    public void setVersion(Long version) { this.version = version; }
 
     public FeedbackReport getReport() { return report; }
     public void setReport(FeedbackReport report) { this.report = report; }
