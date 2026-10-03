@@ -88,10 +88,14 @@ public class RateLimitFilter extends OncePerRequestFilter {
     }
 
     private boolean permitir(String chave, int limite) {
-        if (contadores.size() > MAX_ENTRADAS) {
-            contadores.clear();
-        }
         long minutoAtual = Instant.now().getEpochSecond() / 60;
+        if (contadores.size() > MAX_ENTRADAS) {
+            // Remove apenas janelas de minutos passados, preservando as cotas ativas do minuto corrente
+            contadores.entrySet().removeIf(entry -> entry.getValue().minuto < minutoAtual);
+            if (contadores.size() > MAX_ENTRADAS) {
+                contadores.clear();
+            }
+        }
         Janela janela = contadores.computeIfAbsent(chave, k -> new Janela());
         synchronized (janela) {
             if (janela.minuto != minutoAtual) {
