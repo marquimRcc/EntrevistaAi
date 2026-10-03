@@ -54,13 +54,15 @@ public class OpenAiClient {
     // "contexto" é só uma string descritiva (ex.: "geracao_pergunta
     // interviewId=... numero=3") usada nos logs de retry/erro, pra facilmente
     // identificar qual chamada falhou sem precisar decorar IDs.
+    private long retryBackoffMs = 250L;
+
+    public void setRetryBackoffMs(long retryBackoffMs) {
+        this.retryBackoffMs = retryBackoffMs;
+    }
+
     public JsonNode requestJson(String systemPrompt, String userPrompt, String contexto) {
         RuntimeException ultimoErro = null;
 
-        // Até 3 tentativas: chamadas de IA falham por motivos transitórios
-        // (timeout de rede, rate limit, ou às vezes a IA simplesmente devolve
-        // um JSON malformado). Tentar de novo geralmente resolve — só desistimos
-        // de verdade (AiRetriesExhaustedException) depois da 3ª falha seguida.
         for (int tentativa = 1; tentativa <= MAX_TENTATIVAS; tentativa++) {
             String rawContent = null;
             try {
@@ -77,6 +79,15 @@ public class OpenAiClient {
             }
             log.warn("[AI_CALL_RETRY] tentativa={}/{} contexto={} erro={}",
                 tentativa, MAX_TENTATIVAS, contexto, ultimoErro.getMessage());
+
+            if (tentativa < MAX_TENTATIVAS && retryBackoffMs > 0) {
+                try {
+                    Thread.sleep(retryBackoffMs * tentativa);
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    throw new RuntimeException("Interrompido durante retry da IA", ie);
+                }
+            }
         }
 
         throw new AiRetriesExhaustedException(MAX_TENTATIVAS, contexto);

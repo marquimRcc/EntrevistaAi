@@ -53,6 +53,12 @@ public class OpenAiAudioTranscriber implements AiAudioTranscriber {
         this(apiKey, model, "https://api.openai.com/v1", restClientBuilder);
     }
 
+    private long retryBackoffMs = 250L;
+
+    public void setRetryBackoffMs(long retryBackoffMs) {
+        this.retryBackoffMs = retryBackoffMs;
+    }
+
     @Override
     public String transcribe(byte[] audio, String nomeArquivo) {
         RuntimeException ultimoErro = null;
@@ -64,6 +70,15 @@ public class OpenAiAudioTranscriber implements AiAudioTranscriber {
                 ultimoErro = e;
                 log.warn("[AUDIO_TRANSCRIPTION_RETRY] tentativa={}/{} arquivo={} erro={}",
                     tentativa, MAX_TENTATIVAS, nomeArquivo, e.getMessage());
+
+                if (tentativa < MAX_TENTATIVAS && retryBackoffMs > 0) {
+                    try {
+                        Thread.sleep(retryBackoffMs * tentativa);
+                    } catch (InterruptedException ie) {
+                        Thread.currentThread().interrupt();
+                        throw new RuntimeException("Interrompido durante retry da transcrição de áudio", ie);
+                    }
+                }
             }
         }
 
