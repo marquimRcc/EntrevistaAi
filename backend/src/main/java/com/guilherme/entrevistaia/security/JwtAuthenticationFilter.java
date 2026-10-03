@@ -16,6 +16,7 @@ import org.springframework.web.filter.OncePerRequestFilter;
 import java.io.IOException;
 import java.util.Collections;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 
 // Filtro que roda em TODA requisição HTTP (OncePerRequestFilter garante que
 // roda só uma vez por request, mesmo com forward/include internos), ANTES de
@@ -34,6 +35,15 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
 
     @org.springframework.beans.factory.annotation.Value("${app.auth.bypass:false}")
     private boolean bypassAuth;
+
+    private final ConcurrentHashMap<UUID, CachedUser> userCache = new ConcurrentHashMap<>();
+    private static final long CACHE_TTL_MS = 60_000; // 60 segundos
+
+    private record CachedUser(User user, long expiraEm) {
+        boolean isValido() {
+            return System.currentTimeMillis() <= expiraEm;
+        }
+    }
 
     public JwtAuthenticationFilter(JwtService jwtService, UserRepository userRepository) {
         this.jwtService = jwtService;
@@ -83,7 +93,7 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         }
 
         UUID userId = jwtService.extractUserId(token);
-        User user = userRepository.findById(userId).orElse(null);
+        User user = findUserCached(userId);
 
         // Token válido mas o usuário foi apagado do banco depois de ser emitido
         // (caso raro, mas possível). Trata como não-autenticado.
@@ -118,5 +128,22 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
     @Override
     protected boolean shouldNotFilterAsyncDispatch() {
         return false;
+    }
+
+    private User findUserCached(UUID userId) {
+        CachedUser cached = userCache.get(userId);
+        if (cached != null && cached.isValido()) {
+            return cached.user();
+        }
+        User fresh = userRepository.findById(userId).orElse(null);
+        if (fresh != null) {
+            if (userCache.size() > 10_000) {
+                userCache.clear();
+            }
+            userCache.put(userId, new CachedUser(fresh, System.currentTimeMillis() + CACHE_TTL_MS));
+        } else {
+            userCache.remove(userId);
+        }
+        return fresh;
     }
 }
