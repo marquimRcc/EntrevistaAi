@@ -39,18 +39,29 @@ public class InterviewController {
     private final AiAudioTranscriber audioTranscriber;
 
     // Executor dedicado só pro streaming: a chamada de rede à OpenAI em modo
-    // streaming bloqueia a thread por vários segundos, o que NUNCA pode
-    // acontecer numa thread do pool HTTP normal do servlet container (senão
-    // esgota o pool com poucas entrevistas simultâneas). O controller devolve
-    // o SseEmitter imediatamente e o trabalho de verdade roda aqui.
-    private final ExecutorService streamingExecutor = Executors.newCachedThreadPool();
+    // streaming bloqueia a thread por vários segundos. Usamos um bean gerenciado
+    // com Virtual Threads (Java 21) para máxima escalabilidade e controle de ciclo de vida.
+    private final ExecutorService streamingExecutor;
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public InterviewController(InterviewService interviewService,
+                                AiQuestionStreamGenerator questionStreamGenerator,
+                                AiAudioTranscriber audioTranscriber,
+                                @org.springframework.beans.factory.annotation.Qualifier("streamingExecutor")
+                                @org.springframework.beans.factory.annotation.Autowired(required = false)
+                                ExecutorService streamingExecutor) {
+        this.interviewService = interviewService;
+        this.questionStreamGenerator = questionStreamGenerator;
+        this.audioTranscriber = audioTranscriber;
+        this.streamingExecutor = streamingExecutor != null
+            ? streamingExecutor
+            : Executors.newVirtualThreadPerTaskExecutor();
+    }
 
     public InterviewController(InterviewService interviewService,
                                 AiQuestionStreamGenerator questionStreamGenerator,
                                 AiAudioTranscriber audioTranscriber) {
-        this.interviewService = interviewService;
-        this.questionStreamGenerator = questionStreamGenerator;
-        this.audioTranscriber = audioTranscriber;
+        this(interviewService, questionStreamGenerator, audioTranscriber, null);
     }
 
     // POST /interviews — inicia uma nova entrevista para o usuário logado.
