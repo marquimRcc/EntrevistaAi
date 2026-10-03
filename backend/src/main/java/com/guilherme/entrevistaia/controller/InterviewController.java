@@ -130,10 +130,11 @@ public class InterviewController {
             } catch (Exception e) {
                 log.error("[STREAM_QUESTION_ERROR] interviewId={} erro={}", id, e.getMessage(), e);
                 try {
-                    emitter.send(SseEmitter.event().name("error").data(e.getMessage()));
+                    String erroMsg = e.getMessage() != null ? e.getMessage() : "Não foi possível gerar a pergunta em tempo real. Tente novamente.";
+                    emitter.send(SseEmitter.event().name("error").data(erroMsg));
                 } catch (IOException ignored) {
                 }
-                emitter.completeWithError(e);
+                emitter.complete();
             }
         });
 
