@@ -37,14 +37,20 @@ public class OpenAiAudioTranscriber implements AiAudioTranscriber {
     // RestClient.builder() do zero) pra o teste conseguir plugar um
     // MockRestServiceServer. Sem defaultHeader Content-Type de propósito: cada
     // request define multipart/form-data com o boundary gerado na hora.
-    public OpenAiAudioTranscriber(@Value("${openai.api-key}") String apiKey,
+    public OpenAiAudioTranscriber(@Value("${openai.api-key:}") String apiKey,
                                    @Value("${openai.transcription-model}") String model,
+                                   @Value("${openai.base-url:https://api.openai.com/v1}") String baseUrl,
                                    RestClient.Builder restClientBuilder) {
         this.model = model;
+        String authValue = (apiKey != null && !apiKey.isBlank()) ? apiKey : "not-needed";
         this.restClient = restClientBuilder
-            .baseUrl("https://api.openai.com/v1")
-            .defaultHeader("Authorization", "Bearer " + apiKey)
+            .baseUrl(baseUrl)
+            .defaultHeader("Authorization", "Bearer " + authValue)
             .build();
+    }
+
+    public OpenAiAudioTranscriber(String apiKey, String model, RestClient.Builder restClientBuilder) {
+        this(apiKey, model, "https://api.openai.com/v1", restClientBuilder);
     }
 
     @Override
